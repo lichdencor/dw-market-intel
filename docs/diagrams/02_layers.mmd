@@ -1,0 +1,61 @@
+flowchart TD
+    subgraph SRC["Fuentes externas"]
+        YF["Yahoo Finance API\nOHLCV + Ticker info"]
+        SEC["SEC EDGAR\nForm 4 — Insider Trading"]
+    end
+
+    subgraph VM20["VM 10.10.10.20 — Docker"]
+        subgraph COL["collector.py"]
+            C1["download_ohlcv()"]
+            C2["download_ticker_info(cik_map)"]
+            C3["download_insider_trading()"]
+        end
+        subgraph LANDING["MinIO :9000"]
+            M1["{date}/ohlcv_raw.csv"]
+            M2["{date}/ticker_info.csv"]
+            M3["{date}/insider_raw.csv"]
+        end
+        subgraph ETL["etl.py — Package pattern"]
+            PKG1["OHLCVPackage\nextract → profile → stage → load"]
+            PKG2["InsiderPackage\nextract → profile → stage → load"]
+            PRF["profiler.py — ydata-profiling\nHTML + JSON stats"]
+        end
+        subgraph CUBEJS["Cube.js :4000 / :15432"]
+            CM1["price.yml"]
+            CM2["insider.yml"]
+            CS["CubeStore cache"]
+        end
+        MB["Metabase :3000"]
+    end
+
+    subgraph VM10["VM 10.10.10.10 — PostgreSQL 17"]
+        subgraph STG["schema staging"]
+            S1["raw_ohlcv"]
+            S2["raw_insider"]
+        end
+        subgraph DW["schema dw — Star Schema"]
+            F1["fact_price_daily"]
+            F2["fact_insider_daily"]
+        end
+        subgraph CUBE["schema cube — MVs"]
+            MV1["mv_price_by_sector_period"]
+            MV2["mv_insider_by_ticker_period"]
+            MV3["mv_ticker_summary"]
+        end
+    end
+
+    YF --> C1 & C2
+    SEC --> C3
+    C1 --> M1
+    C2 --> M2
+    C3 --> M3
+    M1 & M2 --> PKG1
+    M3 --> PKG2
+    PKG1 & PKG2 --> PRF
+    PRF -.->|"profiles/"|VM20
+    PKG1 --> S1 --> F1
+    PKG2 --> S2 --> F2
+    F1 & F2 --> MV1 & MV2 & MV3
+    MV1 & MV2 & MV3 --> CM1 & CM2
+    CM1 & CM2 <--> CS
+    MB -- "SQL API :15432" --> CUBEJS

@@ -1,0 +1,17 @@
+C4Context
+    title DW Analytics — Contexto del sistema (C4 Level 1)
+
+    Person(analyst, "Analista", "Explora retornos acumulados, señales de insider trading, indicadores técnicos (SMA, Bollinger) y volatilidad. Accede únicamente a través de Metabase")
+    Person(operator, "Operador", "Monitorea el estado del pipeline, calidad de los datos cargados y servicios. Accede a MinIO, Metabase (admin) y DuckDB para diagnóstico")
+
+    System(dw, "DW Analytics", "Sistema de data warehouse que recolecta datos de mercado e insider trading del sector tech de EE.UU., los transforma en un modelo dimensional y los expone para análisis a través de una capa OLAP")
+
+    System_Ext(yf, "Yahoo Finance API", "API no oficial. Provee precios OHLCV históricos y metadata (sector, market cap, exchange) para 30 tickers del sector tecnológico")
+    System_Ext(sec, "SEC EDGAR", "API oficial pública. Provee Form 4 — reportes obligatorios de compras y ventas de insiders (directores, officers, accionistas >10%)")
+
+    Rel(analyst, dw, "Consulta dashboards, models y métricas", "HTTP :3000 (Metabase)")
+    Rel(operator, dw, "Monitorea pipeline y calidad de datos", "MinIO :9001 · Metabase :3000 · DuckDB CLI")
+    Rel(dw, yf, "Descarga OHLCV diario + ticker info", "HTTPS / yfinance 1.4.1")
+    Rel(dw, sec, "Descarga Form 4 XML por CIK", "HTTPS / REST (www.sec.gov/Archives)")
+
+    UpdateLayoutConfig($c4ShapeInRow="2", $c4BoundaryInRow="1")

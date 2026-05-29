@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>DW Analytics — Profiling Reports</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; background: #f8f9fa; }
+  h1 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+  .run { background: white; border-radius: 8px; padding: 20px; margin: 15px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+  .run h2 { margin: 0 0 10px; color: #2c3e50; font-size: 1.1em; }
+  .links a { display: inline-block; margin: 5px 8px 5px 0; padding: 6px 14px; border-radius: 4px; text-decoration: none; font-size: 0.9em; }
+  .html-link { background: #3498db; color: white; }
+  .json-link { background: #27ae60; color: white; }
+  .html-link:hover { background: #2980b9; }
+  .json-link:hover { background: #219a52; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75em; margin-left: 8px; }
+  .ohlcv { background: #e8f4fd; color: #2980b9; }
+  .insider { background: #fef9e7; color: #f39c12; }
+  .meta { color: #7f8c8d; font-size: 0.85em; margin-top: 8px; }
+  #loading { color: #7f8c8d; font-style: italic; }
+</style>
+</head>
+<body>
+<h1>📊 DW Analytics — Profiling Reports</h1>
+<p style="color:#7f8c8d">Reportes generados por <strong>ydata-profiling</strong> en cada run del ETL. Acceso: <strong>Operador</strong>.</p>
+<div id="content"><p id="loading">Cargando reportes...</p></div>
+
+<script>
+// Detectar fechas disponibles explorando rutas conocidas
+async function detectRuns() {
+  const content = document.getElementById('content');
+  content.innerHTML = '';
+
+  // Intentar listar el directorio raíz via nginx autoindex JSON
+  try {
+    const resp = await fetch('/?format=json');
+    const dirs = resp.ok ? await resp.json() : [];
+    const dates = dirs.filter(d => d.type === 'directory').map(d => d.name.replace('/', ''));
+
+    if (dates.length === 0) throw new Error('No hay fechas');
+
+    for (const date of dates.reverse()) {
+      await renderDate(date, content);
+    }
+  } catch(e) {
+    // Fallback: mostrar directamente el directorio con autoindex
+    content.innerHTML = '<p>Ver <a href="/" style="color:#3498db">directorio de reportes</a> — navegá por fecha para ver los HTML.</p>';
+  }
+}
+
+async function renderDate(date, container) {
+  const div = document.createElement('div');
+  div.className = 'run';
+
+  const sources = ['ohlcv', 'insider'];
+  let links = '';
+
+  for (const src of sources) {
+    const htmlUrl = `/${date}/${src}.html`;
+    const jsonUrl = `/${date}/${src}_stats.json`;
+
+    const htmlResp = await fetch(htmlUrl, {method: 'HEAD'}).catch(() => null);
+    if (htmlResp && htmlResp.ok) {
+      const badge = `<span class="badge ${src}">${src.toUpperCase()}</span>`;
+      links += `<a class="html-link" href="${htmlUrl}" target="_blank">📈 ${src} report${badge}</a>`;
+
+      const jsonResp = await fetch(jsonUrl, {method: 'HEAD'}).catch(() => null);
+      if (jsonResp && jsonResp.ok) {
+        links += `<a class="json-link" href="${jsonUrl}" target="_blank">📋 stats JSON</a>`;
+      }
+    }
+  }
+
+  if (links) {
+    div.innerHTML = `
+      <h2>📅 ${date}</h2>
+      <div class="links">${links}</div>
+    `;
+    container.appendChild(div);
+  }
+}
+
+detectRuns();
+</script>
+</body>
+</html>

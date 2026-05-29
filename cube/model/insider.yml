@@ -1,0 +1,151 @@
+cubes:
+  # ============================================================
+  # Insider — basado en insider_daily_enriched (vista DuckDB)
+  # La vista ya incluye todas las dimensiones — no se necesitan joins
+  # ============================================================
+  - name: Insider
+    sql_table: insider_daily_enriched
+
+    dimensions:
+      - name: id
+        sql: "CONCAT(symbol, '_', full_date::VARCHAR, '_', reporter_name, '_', transaction_code)"
+        type: string
+        primary_key: true
+
+      - name: symbol
+        sql: symbol
+        type: string
+        title: Ticker
+
+      - name: sector
+        sql: sector
+        type: string
+        title: Sector
+
+      - name: full_date
+        sql: full_date
+        type: time
+        title: Fecha
+
+      - name: year
+        sql: year
+        type: number
+        title: Año
+
+      - name: month
+        sql: month
+        type: number
+        title: Mes
+
+      - name: reporter_name
+        sql: reporter_name
+        type: string
+        title: Nombre insider
+
+      - name: title
+        sql: title
+        type: string
+        title: Cargo
+
+      - name: insider_role
+        sql: insider_role
+        type: string
+        title: Rol (Officer / Director / 10% Owner)
+
+      - name: transaction_code
+        sql: transaction_code
+        type: string
+        title: Código SEC
+
+      - name: transaction_label
+        sql: transaction_label
+        type: string
+        title: Tipo transacción
+
+      - name: direction
+        sql: direction
+        type: string
+        title: Dirección (buy/sell/neutral)
+
+      - name: is_open_market
+        sql: is_open_market
+        type: boolean
+        title: Mercado abierto (P o S)
+
+      - name: accession_number
+        sql: accession_number
+        type: string
+        title: Número filing EDGAR
+
+    measures:
+      - name: count
+        type: count
+        title: Transacciones
+
+      - name: total_shares
+        sql: shares_total
+        type: sum
+        title: Total acciones
+
+      - name: total_value_usd
+        sql: total_value
+        type: sum
+        title: Valor total (USD)
+        format: currency
+
+      - name: avg_price_per_share
+        sql: price_per_share
+        type: avg
+        title: Precio promedio por acción
+        format: currency
+
+      - name: unique_insiders
+        sql: reporter_name
+        type: count_distinct
+        title: Insiders únicos
+
+      - name: buy_value_usd
+        sql: "CASE WHEN direction = 'buy' THEN total_value ELSE 0 END"
+        type: sum
+        title: Valor compras (USD)
+        format: currency
+
+      - name: sell_value_usd
+        sql: "CASE WHEN direction = 'sell' THEN total_value ELSE 0 END"
+        type: sum
+        title: Valor ventas (USD)
+        format: currency
+
+      - name: open_market_buy_usd
+        sql: "CASE WHEN is_open_market AND direction = 'buy' THEN total_value ELSE 0 END"
+        type: sum
+        title: Compras mercado abierto (USD)
+        format: currency
+
+      - name: net_signal
+        sql: >
+          (SUM(CASE WHEN direction = 'buy'  THEN total_value ELSE 0 END)
+           - SUM(CASE WHEN direction = 'sell' THEN total_value ELSE 0 END))
+          / NULLIF(SUM(ABS(total_value)) FILTER (WHERE direction IN ('buy','sell')), 0)
+        type: number
+        title: Señal neta insider (-1 venta pura → +1 compra pura)
+
+    pre_aggregations:
+      - name: by_ticker_direction_month
+        measures:
+          - total_shares
+          - total_value_usd
+          - unique_insiders
+          - buy_value_usd
+          - sell_value_usd
+          - open_market_buy_usd
+        dimensions:
+          - symbol
+          - sector
+          - direction
+          - year
+          - month
+        time_dimension: full_date
+        granularity: month
+        refresh_key:
+          every: 1 day

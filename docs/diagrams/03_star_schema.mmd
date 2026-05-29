@@ -1,0 +1,77 @@
+erDiagram
+    dim_ticker {
+        serial ticker_id PK
+        text symbol UK
+        text company_name
+        text sector
+        text industry
+        text exchange
+        text market_cap_cat
+        text sec_cik UK
+    }
+    dim_date {
+        int date_id PK
+        date full_date UK
+        smallint year
+        smallint quarter
+        smallint month
+        text month_name
+        smallint day_of_week
+        boolean is_trading_day
+    }
+    dim_period {
+        serial period_id PK
+        text granularity UK
+        text label
+        smallint trading_days
+    }
+    dim_insider {
+        serial insider_id PK
+        text reporter_cik UK
+        text reporter_name
+        text title
+        boolean is_director
+        boolean is_officer
+        boolean is_ten_pct_owner
+    }
+    dim_transaction_type {
+        serial transaction_type_id PK
+        text code UK
+        text label
+        text direction
+        boolean is_open_market
+    }
+    fact_price_daily {
+        int ticker_id FK
+        int date_id FK
+        int period_id FK
+        numeric open
+        numeric high
+        numeric low
+        numeric close
+        numeric adj_close
+        bigint volume
+        numeric daily_return
+        numeric pct_change
+        numeric rolling_30d_vol
+    }
+    fact_insider_daily {
+        int ticker_id FK
+        int date_id FK
+        int insider_id FK
+        int transaction_type_id FK
+        numeric shares_total
+        numeric price_per_share
+        numeric total_value
+        numeric shares_owned_after
+        text accession_number
+        int filing_date_id FK
+    }
+
+    dim_ticker        ||--o{ fact_price_daily   : "ticker_id"
+    dim_date          ||--o{ fact_price_daily   : "date_id"
+    dim_period        ||--o{ fact_price_daily   : "period_id"
+    dim_ticker        ||--o{ fact_insider_daily : "ticker_id"
+    dim_date          ||--o{ fact_insider_daily : "date_id / filing_date_id"
+    dim_insider       ||--o{ fact_insider_daily : "insider_id"
+    dim_transaction_type ||--o{ fact_insider_daily : "transaction_type_id"

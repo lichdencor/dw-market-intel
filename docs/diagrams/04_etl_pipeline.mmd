@@ -1,0 +1,29 @@
+flowchart TD
+    MINIO["MinIO\nohlcv_raw.csv · ticker_info.csv · insider_raw.csv"]
+
+    subgraph BASE["ETLPackage — contrato base"]
+        direction LR
+        EX["extract()\nleer de MinIO"] --> PR["profile()\nydata-profiling\nHTML + JSON stats"] --> ST["stage()\nTRUNCATE+COPY\nstaging.*"] --> LD["load()\ndims + facts\nON CONFLICT UPSERT"]
+    end
+
+    subgraph OHLCV["OHLCVPackage"]
+        O1["ohlcv_raw.csv\n+ ticker_info.csv"]
+        O2["null_pct por columna\nconteo de tickers"]
+        O3["staging.raw_ohlcv\n7.279 filas"]
+        O4["dim_ticker · dim_date\nfact_price_daily\nwindow: LAG · STDDEV rolling 30d"]
+    end
+
+    subgraph INSIDER["InsiderPackage"]
+        I1["insider_raw.csv\n(Form 4 SEC EDGAR)"]
+        I2["null_pct en CIK\ny transaction_code"]
+        I3["staging.raw_insider\nN transacciones"]
+        I4["dim_insider · dim_date\nfact_insider_daily\nagregación diaria por insider×tipo"]
+    end
+
+    PG[("PostgreSQL\ndw_analytics")]
+    PROF["profiler.py\nprofiles/{date}/*.html\nprofiles/{date}/*_stats.json"]
+
+    MINIO --> O1 & I1
+    O1 --> O2 --> O3 --> O4 --> PG
+    I1 --> I2 --> I3 --> I4 --> PG
+    O2 & I2 --> PROF

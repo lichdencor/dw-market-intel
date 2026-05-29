@@ -1,0 +1,33 @@
+flowchart LR
+    MB["Metabase\n:3000"]
+
+    subgraph CUBEJS["Cube.js — VM 10.10.10.20"]
+        direction TB
+        REST["REST API :4000\n/cubejs-api/v1/load"]
+        SQL["SQL API :15432\nPostgreSQL-compatible"]
+        CS["CubeStore\npre-aggregation cache"]
+        subgraph MODELS["Modelos YAML"]
+            PM["price.yml\nPrice cube\nPre-agg: by_ticker_month\nby_sector_quarter"]
+            IM["insider.yml\nInsider cube\nPre-agg: by_ticker_direction_month"]
+            DM["dims.yml\nTicker · DateDim\nInsiderDim · TransactionType"]
+        end
+        REST & SQL <--> CS
+    end
+
+    subgraph PG["PostgreSQL — VM 10.10.10.10"]
+        direction TB
+        DW["schema dw\nfact_price_daily\nfact_insider_daily\n+ 5 dimensiones"]
+        subgraph MV["schema cube — Materialized Views"]
+            MV1["mv_price_by_sector_period\nROLLUP(sector, year, quarter, month)"]
+            MV2["mv_insider_by_ticker_period\nCUBE(symbol, direction, year, month)"]
+            MV3["mv_ticker_summary\nsnapshot ejecutivo por ticker"]
+        end
+        CRON["pg_cron\nRefresh diario 06:30–06:40"]
+        MV -.->|"REFRESH CONCURRENTLY"| CRON
+    end
+
+    MB -->|"SQL API :15432"| SQL
+    MB -->|"REST /load"| REST
+    CUBEJS -->|"SELECT"| DW
+    CUBEJS -->|"pre-agg queries"| MV
+    MODELS -.->|"define"| CUBEJS

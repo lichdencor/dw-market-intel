@@ -1,0 +1,17 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# setuptools primero — provee pkg_resources que necesita ydata-profiling
+RUN pip install --no-cache-dir setuptools==69.5.1
+
+RUN pip install --no-cache-dir \
+    pandas==2.2.2 \
+    psycopg2-binary==2.9.9 \
+    minio==7.2.7 \
+    ydata-profiling==4.9.0
+
+COPY packages/ packages/
+COPY etl.py .
+
+CMD ["python", "etl.py"]

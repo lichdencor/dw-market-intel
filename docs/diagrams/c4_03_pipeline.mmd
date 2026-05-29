@@ -1,0 +1,56 @@
+flowchart TD
+    subgraph COL["Collector — pipeline/collector/collector.py"]
+        direction TB
+        C1["download_ohlcv()\nyf.download() batch · yfinance ≥1.4.1"]
+        C2["download_ticker_info(cik_map)\nsec_cik incluido"]
+        C3["download_insider_trading()\nSEC EDGAR Form 4\nMAX_FILINGS=500 / ticker · ASOF XML fix"]
+        CU["upload_csv_append()\nAppend + dedup a MinIO\nBATCH_SIZE / TICKER_OFFSET"]
+        C1 & C2 & C3 --> CU
+    end
+
+    subgraph MINIO["MinIO — raw-ohlcv/{date}/"]
+        M1["ohlcv_raw.csv"]
+        M2["ticker_info.csv"]
+        M3["insider_raw.csv"]
+    end
+
+    CU --> M1 & M2 & M3
+
+    subgraph ETL["ETL — Package pattern"]
+        direction TB
+
+        LOCK["pg_try_advisory_lock(20260529)\naborta si otro ETL ya corre"]
+
+        subgraph PKG["ETLPackage.run()"]
+            direction LR
+            EX["extract()\nleer de MinIO"] --> PRF["profile(data)"] --> ST["stage()\nquarantine inválidos\nTRUNCATE+COPY staging.*"] --> LD["load()\ndims + facts\nON CONFLICT UPSERT"]
+        end
+
+        subgraph PROFILER["profiler.py — dos salidas con roles distintos"]
+            direction TB
+            P1["📊 Salida ARQUITECTURAL\ncolumn_stats → profiling.column_stats\nnull_pct · distinct · min/max por columna\nqueryable desde Metabase vía dw_user"]
+            P2["🛠️ Salida OPERATIVA\nydata-profiling HTML\n→ ./profiles/{date}/name.html\n→ MinIO bucket profiling-reports\nservido por nginx :8080\nno forma parte del modelo de datos"]
+        end
+
+        PRF -->|"genera"| P1
+        PRF -->|"genera"| P2
+
+        LOCK --> PKG
+    end
+
+    subgraph PG["PostgreSQL dw_analytics"]
+        STAGE["staging.*\n(UNLOGGED)"]
+        DW_SCHEMA["dw.*\nstar schema"]
+        PROFILING["profiling.*\nrun_log + column_stats\n← arquitectural: persiste en BD\n← accesible desde Metabase"]
+        CUBE_SCHEMA["cube.*\n← computado por DuckDB"]
+    end
+
+    M1 & M2 --> EX
+    M3 --> EX
+    ST --> STAGE --> DW_SCHEMA
+    LD --> DW_SCHEMA
+    P1 -->|"INSERT"| PROFILING
+    P2 -.->|"artefacto operativo\nno persiste en BD"| NGINX["nginx :8080\nMinIO :9001/profiling-reports"]
+
+    DW_SCHEMA -->|"postgres_scanner"| DUCKDB["DuckDB\n(OLAP compute)"]
+    DUCKDB -->|"psycopg2 COPY"| CUBE_SCHEMA

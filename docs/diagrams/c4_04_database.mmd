@@ -1,0 +1,52 @@
+flowchart TD
+    subgraph STAGING["schema staging — UNLOGGED, TRUNCATE+COPY por run"]
+        SR["raw_ohlcv — TEXT × 8 cols"]
+        SI["raw_insider — TEXT × 18 cols"]
+        QO["quarantine_ohlcv — filas rechazadas + reason"]
+        QI["quarantine_insider — filas rechazadas + reason"]
+    end
+
+    subgraph DW["schema dw — Star Schema (PKs + FKs + CHECKs + RLS)"]
+        direction TB
+        subgraph DIMS["Dimensiones conformadas"]
+            DT["dim_ticker + dim_ticker_history\nticker_id PK · symbol UK\nsector · industry · sec_cik UK\nSCD Type 2: valid_from/valid_to"]
+            DD["dim_date\ndate_id PK · full_date UK\nyear · quarter · month · is_trading_day"]
+            DP["dim_period — 1d/1wk/1mo"]
+            DI["dim_insider\ninsider_id PK · reporter_cik UK"]
+            DTT["dim_transaction_type\ncode UK · direction · is_open_market"]
+        end
+        subgraph FACTS["2 Facts de negocio"]
+            FP["fact_price_daily\nPK(ticker,date,period)\nOHLCV · SMA20/50/200\nBollinger · volume_ratio\nis_suspect · source_partition"]
+            FI["fact_insider_daily\nPK(ticker,date,insider,tx_type)\nshares · price · total_value\naccession_number · RLS habilitado"]
+        end
+        FMS["fact_price_monthly_snapshot\n(snapshot periódico derivado)\nopen/close/high/low · monthly_return"]
+        AL["audit_log — FOR EACH STATEMENT"]
+        DT --> FP & FI & FMS
+        DD --> FP & FI
+        DP --> FP
+        DI --> FI
+        DTT --> FI
+        FP -.popula mensualmente.-> FMS
+        FP & FI -.audit.-> AL
+    end
+
+    subgraph CUBE["schema cube — Resultados OLAP\n(computados por DuckDB, almacenados en PG para Metabase)"]
+        C1["ticker_summary\nYTD return · vol anual · señal insider\nDuckDB: FIRST(adj_close ORDER BY date)"]
+        C2["price_by_sector_period\nROLLUP(sector, año, trimestre, mes)\nDuckDB: GROUP BY ROLLUP vectorizado"]
+        C3["insider_pressure\nCUBE(symbol, direction, año, mes)\ninsider_net_signal = (buy-sell)/(buy+sell)"]
+        C4["post_insider_return\nretorno 5/10/30d post-compra P\nDuckDB: ASOF JOIN nativo"]
+    end
+
+    subgraph PROFILING["schema profiling — Observabilidad"]
+        RL["run_log — 1 fila por ETL run"]
+        CS["column_stats — stats por columna por run"]
+    end
+
+    subgraph DUCKDB["DuckDB worker (VM 10.10.10.20)"]
+        DK["Motor OLAP columnar/vectorizado\nLee DW via postgres_scanner\nComputa ROLLUP/CUBE/ASOF JOIN\nEscribe resultados a schema cube"]
+    end
+
+    STAGING -->|"ETL transforma y carga"| DW
+    DW -->|"postgres_scanner (read)"| DUCKDB
+    DUCKDB -->|"psycopg2 COPY (write)"| CUBE
+    DW -->|"INSERT por ETLPackage"| PROFILING

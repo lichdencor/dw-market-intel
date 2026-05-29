@@ -1,0 +1,7 @@
+FROM metabase/metabase:latest
+# Alpine — DuckDB driver nativo necesita libstdc++ (C++ runtime)
+# gcompat: capa de compatibilidad glibc para musl (Alpine)
+# libstdc++: C++ runtime requerido por el native DuckDB lib
+RUN apk add --no-cache gcompat libstdc++
+# Pre-instalar el driver para evitar problemas de permisos en volumen montado
+COPY duckdb.metabase-driver.jar /plugins/

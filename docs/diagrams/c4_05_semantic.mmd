@@ -1,0 +1,35 @@
+flowchart TB
+    subgraph PG_DW["PostgreSQL — schema dw (DW)"]
+        F1["fact_price_daily\n7 dims + OHLCV + indicadores"]
+        F2["fact_insider_daily\n4 dims + transacciones Form 4"]
+    end
+
+    subgraph DUCK["DuckDB worker — Motor OLAP (VM 10.10.10.20)"]
+        direction TB
+        PS["postgres_scanner\n(adjunta PG como fuente read-only)"]
+        COMP["Compute engine\n• ROLLUP(sector, año, trimestre, mes)\n• CUBE(symbol, direction, año, mes)\n• ASOF JOIN para retorno post-compra\n• FIRST(adj_close ORDER BY date DESC)\n• Ejecución vectorizada columnar"]
+        PS --> COMP
+    end
+
+    subgraph PG_CUBE["PostgreSQL — schema cube (OLAP results)"]
+        C1["ticker_summary\nYTD return, vol anual\nseñal insider, días desde último insider"]
+        C2["price_by_sector_period\nRendimiento y volatilidad\npor sector × período"]
+        C3["insider_pressure\nSeñal neta (-1→+1)\ncompras vs ventas por ticker/mes"]
+        C4["post_insider_return\nRetorno 5/10/30d\npost-compra de mercado abierto (código P)"]
+    end
+
+    subgraph MB["Metabase v0.59"]
+        CONN["Conexión PostgreSQL\n(dw_user, schemas: cube + dw + profiling)"]
+        MODELS["5 Models\n(sobre cube.* y dw.*)"]
+        METRICS["10 Metrics\n(YTD Return, Vol, Net Signal...)"]
+        DASH["Dashboard\n(18 cards, filtro ticker)"]
+        CONN --> MODELS --> METRICS --> DASH
+    end
+
+    F1 & F2 -->|"postgres_scanner :5432"| PS
+    COMP -->|"psycopg2 COPY\n(escribe resultados)"| C1 & C2 & C3 & C4
+    C1 & C2 & C3 & C4 -->|"SELECT :5432"| CONN
+
+    style DUCK fill:#FF8C00,color:#fff
+    style PG_CUBE fill:#336699,color:#fff
+    style MB fill:#509EE3,color:#fff

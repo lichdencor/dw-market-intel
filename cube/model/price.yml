@@ -1,0 +1,163 @@
+cubes:
+  # ============================================================
+  # Price — basado en price_daily_enriched (vista DuckDB)
+  # La vista ya incluye todas las dimensiones — no se necesitan joins
+  # ============================================================
+  - name: Price
+    sql_table: price_daily_enriched
+
+    dimensions:
+      - name: id
+        sql: "CONCAT(symbol, '_', full_date::VARCHAR)"
+        type: string
+        primary_key: true
+
+      - name: symbol
+        sql: symbol
+        type: string
+        title: Ticker
+
+      - name: sector
+        sql: sector
+        type: string
+        title: Sector
+
+      - name: market_cap_cat
+        sql: market_cap_cat
+        type: string
+        title: Capitalización
+
+      - name: full_date
+        sql: full_date
+        type: time
+        title: Fecha
+
+      - name: year
+        sql: year
+        type: number
+        title: Año
+
+      - name: quarter
+        sql: quarter
+        type: number
+        title: Trimestre
+
+      - name: month
+        sql: month
+        type: number
+        title: Mes
+
+      - name: is_suspect
+        sql: is_suspect
+        type: boolean
+        title: Dato sospechoso (var > 15%)
+
+    measures:
+      - name: count
+        type: count
+        title: Días de trading
+
+      - name: avg_close
+        sql: close
+        type: avg
+        title: Precio cierre promedio
+        format: currency
+
+      - name: max_high
+        sql: high
+        type: max
+        title: Máximo del período
+        format: currency
+
+      - name: min_low
+        sql: low
+        type: min
+        title: Mínimo del período
+        format: currency
+
+      - name: total_volume
+        sql: volume
+        type: sum
+        title: Volumen total
+
+      - name: avg_daily_return_pct
+        sql: "COALESCE(pct_change, 0) * 100"
+        type: avg
+        title: Retorno diario promedio (%)
+
+      - name: avg_volatility_30d
+        sql: "COALESCE(rolling_30d_vol, 0)"
+        type: avg
+        title: Volatilidad rolling 30d
+
+      - name: avg_volume_ratio
+        sql: "COALESCE(volume_ratio, 1)"
+        type: avg
+        title: Ratio volumen vs avg 30d (>1 = spike)
+
+      - name: avg_sma_20
+        sql: sma_20
+        type: avg
+        title: SMA 20 días
+        format: currency
+
+      - name: avg_sma_50
+        sql: sma_50
+        type: avg
+        title: SMA 50 días
+        format: currency
+
+      - name: avg_sma_200
+        sql: sma_200
+        type: avg
+        title: SMA 200 días
+        format: currency
+
+      - name: avg_bb_upper
+        sql: bb_upper
+        type: avg
+        title: Bollinger Band superior
+        format: currency
+
+      - name: avg_bb_lower
+        sql: bb_lower
+        type: avg
+        title: Bollinger Band inferior
+        format: currency
+
+      - name: suspect_days
+        sql: "CASE WHEN is_suspect THEN 1 ELSE 0 END"
+        type: sum
+        title: Días con variación sospechosa
+
+    pre_aggregations:
+      - name: by_ticker_month
+        measures:
+          - avg_close
+          - total_volume
+          - avg_daily_return_pct
+          - avg_volume_ratio
+        dimensions:
+          - symbol
+          - sector
+          - year
+          - month
+        time_dimension: full_date
+        granularity: month
+        refresh_key:
+          every: 1 day
+
+      - name: by_sector_quarter
+        measures:
+          - avg_close
+          - total_volume
+          - avg_daily_return_pct
+          - avg_volatility_30d
+        dimensions:
+          - sector
+          - year
+          - quarter
+        time_dimension: full_date
+        granularity: quarter
+        refresh_key:
+          every: 1 day

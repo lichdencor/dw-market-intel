@@ -1,0 +1,27 @@
+# Credenciales y notas operativas privadas — NUNCA commitear
+.env
+CLAUDE.md
+TODO.md
+
+# Datos generados en runtime
+profiles/
+duckdb/
+
+# Reportes generados (regenerar con: bash docs/build.sh)
+docs/informes/img/
+docs/informes/*.docx
+docs/informes/*.pdf
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Docker build cache
+.dockerignore
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

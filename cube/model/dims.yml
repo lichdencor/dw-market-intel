@@ -1,0 +1,169 @@
+cubes:
+  # ============================================================
+  # TickerSummary — snapshot ejecutivo por ticker
+  # Basado en la vista DuckDB ticker_summary
+  # ============================================================
+  - name: TickerSummary
+    sql_table: ticker_summary
+
+    dimensions:
+      - name: symbol
+        sql: symbol
+        type: string
+        primary_key: true
+        title: Ticker
+
+      - name: company_name
+        sql: company_name
+        type: string
+
+      - name: sector
+        sql: sector
+        type: string
+
+      - name: market_cap_cat
+        sql: market_cap_cat
+        type: string
+        title: Capitalización (large/mid/small)
+
+    measures:
+      - name: count
+        type: count
+        title: Tickers
+
+      - name: avg_ytd_return
+        sql: ytd_return_pct
+        type: avg
+        title: Retorno YTD promedio (%)
+
+      - name: avg_vol_annual
+        sql: vol_annual_pct
+        type: avg
+        title: Volatilidad anualizada promedio (%)
+
+      - name: total_insider_buy
+        sql: insider_buy_usd
+        type: sum
+        title: Total compras insider (USD)
+        format: currency
+
+      - name: total_insider_sell
+        sql: insider_sell_usd
+        type: sum
+        title: Total ventas insider (USD)
+        format: currency
+
+      - name: latest_close
+        sql: latest_close
+        type: avg
+        title: Precio de cierre más reciente
+        format: currency
+
+  # ============================================================
+  # InsiderPressure — señal agregada por ticker/período
+  # Basado en la vista DuckDB insider_pressure (CUBE grouping)
+  # ============================================================
+  - name: InsiderPressure
+    sql_table: "SELECT * FROM insider_pressure WHERE symbol != 'ALL' AND direction != 'ALL' AND year != 'ALL'"
+
+    dimensions:
+      - name: id
+        sql: "CONCAT(symbol, '_', direction, '_', year, '_', month)"
+        type: string
+        primary_key: true
+
+      - name: symbol
+        sql: symbol
+        type: string
+        title: Ticker
+
+      - name: direction
+        sql: direction
+        type: string
+        title: Dirección (buy/sell/neutral)
+
+      - name: year
+        sql: year
+        type: string
+        title: Año
+
+      - name: month
+        sql: month
+        type: string
+        title: Mes
+
+    measures:
+      - name: total_value_usd
+        sql: total_value_usd
+        type: sum
+        title: Valor total (USD)
+        format: currency
+
+      - name: buy_value_usd
+        sql: buy_value_usd
+        type: sum
+        title: Compras (USD)
+        format: currency
+
+      - name: sell_value_usd
+        sql: sell_value_usd
+        type: sum
+        title: Ventas (USD)
+        format: currency
+
+      - name: avg_net_signal
+        sql: insider_net_signal
+        type: avg
+        title: Señal neta (-1 → +1)
+
+      - name: unique_insiders
+        sql: unique_insiders
+        type: sum
+        title: Insiders únicos
+
+  # ============================================================
+  # PostInsiderReturn — retorno 5/10/30d post-compra de insider
+  # Basado en la vista DuckDB post_insider_return
+  # ============================================================
+  - name: PostInsiderReturn
+    sql_table: post_insider_return
+
+    dimensions:
+      - name: id
+        sql: "CONCAT(symbol, '_', buy_date::VARCHAR)"
+        type: string
+        primary_key: true
+
+      - name: symbol
+        sql: symbol
+        type: string
+        title: Ticker
+
+      - name: sector
+        sql: sector
+        type: string
+
+      - name: buy_date
+        sql: buy_date
+        type: time
+        title: Fecha de compra insider
+
+    measures:
+      - name: count
+        type: count
+        title: Compras analizadas
+
+      - name: avg_return_5d
+        sql: return_5d_pct
+        type: avg
+        title: Retorno promedio 5 días post-compra (%)
+
+      - name: avg_return_10d
+        sql: return_10d_pct
+        type: avg
+        title: Retorno promedio 10 días post-compra (%)
+
+      - name: avg_return_30d
+        sql: return_30d_pct
+        type: avg
+        title: Retorno promedio 30 días post-compra (%)

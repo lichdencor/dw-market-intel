@@ -1,0 +1,28 @@
+graph TB
+    subgraph VM10["VM 10.10.10.10 — PostgreSQL 17 (bare metal)"]
+        direction TB
+        PG["PostgreSQL 17\npuerto :5432"]
+        S1["schema: staging\nraw_ohlcv · raw_insider"]
+        S2["schema: dw\n5 dims · 2 facts · 3 views"]
+        S3["schema: cube\n3 materialized views"]
+        CRON["pg_cron\nRefresh diario 06:30–06:40"]
+        PG --> S1 & S2 & S3
+        PG -.- CRON
+    end
+
+    subgraph VM20["VM 10.10.10.20 — Docker Compose"]
+        direction TB
+        MINIO["MinIO\n:9000 API / :9001 UI"]
+        MB["Metabase\n:3000"]
+        CUBE["Cube.js\n:4000 REST / :15432 SQL API"]
+        CS["CubeStore\n(pre-aggregation cache)"]
+        COL["collector\n(profile: pipeline)"]
+        ETL_SVC["etl\n(profile: pipeline)"]
+        CUBE <--> CS
+    end
+
+    COL -->|"PUT {date}/*.csv"| MINIO
+    ETL_SVC -->|"GET {date}/*.csv"| MINIO
+    ETL_SVC -->|"UPSERT via psycopg2"| PG
+    CUBE -->|"SELECT :5432"| PG
+    MB -->|"SQL API :15432"| CUBE

@@ -1,0 +1,4 @@
+FROM cubejs/cube:latest
+
+# Instalar el driver DuckDB para Cube.js
+RUN npm install @cubejs-backend/duckdb-driver
