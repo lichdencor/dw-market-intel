@@ -5,27 +5,31 @@ C4Container
     Person(operator, "Operador")
 
     System_Boundary(vm10, "VM 10.10.10.10 — Bare Metal") {
-        ContainerDb(pg, "PostgreSQL 17", "RDBMS", "schema staging (raw) · schema dw (star schema) · schema cube (resultados OLAP) · schema profiling (observabilidad). PKs, FKs, CHECKs, RLS, audit, pg_cron")
+        ContainerDb(pg, "PostgreSQL 17", "RDBMS — DW puro", "schema staging (raw) · schema dw (star schema) · schema cube (resultados OLAP) · schema profiling (observabilidad). PKs, FKs, CHECKs, SCD2, RLS, audit, pg_cron, pg_stat_statements")
     }
 
     System_Boundary(vm20, "VM 10.10.10.20 — Docker Compose") {
         Container(collector, "Collector", "Python 3.12", "Descarga OHLCV + Form 4 en batches. MAX_FILINGS cap. Append+dedup a MinIO")
-        Container(etl, "ETL", "Python 3.12", "Package pattern: extract → profile → stage → load. Advisory lock. SCD Type 2. SMA/Bollinger")
+        Container(etl, "ETL", "Python 3.12", "Package pattern: extract (incremental) → profile → stage → load. Advisory lock. SCD Type 2. SMA/Bollinger. Heartbeat a Uptime Kuma al terminar")
         ContainerDb(minio, "MinIO", "Object Storage S3", "Landing zone: raw-ohlcv/{YYYY-MM-DD}/*.csv — inmutable, particionado por fecha")
         Container(duckdb, "DuckDB worker", "Python + DuckDB 1.1", "Motor OLAP: lee DW via postgres_scanner, computa ROLLUP/CUBE/ASOF JOIN vectorizados, escribe resultados a PostgreSQL schema cube via psycopg2")
-        Container(metabase, "Metabase v0.59", "JVM + React", "BI. Único entry point del Analista. Conecta a PostgreSQL — ve schema cube (OLAP) y schema dw (DW)")
+        Container(metabase, "Metabase v0.59", "JVM + React", "BI. Único entry point del Analista. bi_user ve solo schema cube. dw_user ve schema dw + profiling")
+        Container(nginx, "Nginx", "Alpine", "Sirve reportes HTML de ydata-profiling. http://10.10.10.20:8080")
+        Container(kuma, "Uptime Kuma", "Node.js", "Monitoreo interno: servicios HTTP/TCP + pipeline heartbeat. Solo LAN — http://10.10.10.20:3001")
     }
 
     Rel(analyst, metabase, "Dashboards e insights", "HTTP :3000")
     Rel(operator, minio, "Monitorea archivos raw", "HTTP :9001")
-    Rel(operator, metabase, "Admin de conexiones", "HTTP :3000")
+    Rel(operator, nginx, "Revisa reportes de profiling", "HTTP :8080")
+    Rel(operator, kuma, "Monitorea servicios y pipeline", "HTTP :3001 (LAN only)")
 
     Rel(collector, minio, "PUT {date}/*.csv", "S3 API :9000")
-    Rel(etl, minio, "GET {date}/*.csv", "S3 API :9000")
+    Rel(etl, minio, "GET {date}/*.csv (incremental)", "S3 API :9000")
     Rel(etl, pg, "UPSERT staging + dw + profiling", "psycopg2 :5432")
+    Rel(etl, kuma, "Heartbeat al terminar", "HTTP push :3001")
 
     Rel(duckdb, pg, "SELECT dw.* (lectura)", "postgres_scanner :5432")
     Rel(duckdb, pg, "WRITE cube.* (resultados OLAP)", "psycopg2 :5432")
-    Rel(metabase, pg, "SELECT cube.* + dw.*", "JDBC :5432")
+    Rel(metabase, pg, "SELECT cube.* (bi_user) + dw.* (dw_user)", "JDBC :5432")
 
     UpdateLayoutConfig($c4ShapeInRow="3", $c4BoundaryInRow="1")

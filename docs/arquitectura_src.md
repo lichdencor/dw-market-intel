@@ -17,9 +17,9 @@ Se construyó un data warehouse que integra dos fuentes públicas — Yahoo Fina
 
 Los tres principios de diseño que guían todas las decisiones:
 
-1. **Separación de responsabilidades**: el DW (PostgreSQL) almacena y garantiza integridad; el motor OLAP (DuckDB) analiza; la capa semántica (Cube.js) modela; la presentación (Metabase) visualiza.
-2. **Un único entry point para el analista**: todo análisis pasa por Metabase. El analista nunca consulta PostgreSQL directamente.
-3. **Observabilidad completa**: cada run del pipeline escribe en `profiling.*`, cada fila rechazada va a quarantine, cada cambio en dimensiones queda en historia.
+1. **Separación de responsabilidades**: el DW (PostgreSQL) almacena y garantiza integridad; el motor OLAP (DuckDB) computa y escribe resultados; Metabase los visualiza.
+2. **Un único entry point para el analista**: todo análisis pasa por Metabase. El analista (`bi_user`) solo puede ver el schema `cube` — acceso a facts crudas bloqueado estructuralmente por PostgreSQL.
+3. **Observabilidad completa**: cada run del pipeline escribe en `profiling.*`, cada fila rechazada va a quarantine, cada cambio en dimensiones queda en historia, y Uptime Kuma monitorea servicios y heartbeat del pipeline.
 
 ---
 
@@ -98,11 +98,12 @@ PostgreSQL 17 corre sin Docker. Su único rol es el **Data Warehouse relacional*
 | Container | Puerto | Rol |
 |---|---|---|
 | **Collector** | — | Descarga OHLCV + Form 4, escribe CSVs a MinIO |
-| **ETL** | — | Lee MinIO, profilea, carga PostgreSQL |
+| **ETL** | — | Lee MinIO (incremental), profilea, carga PostgreSQL. Heartbeat a Uptime Kuma al terminar |
 | **MinIO** | :9000/:9001 | Landing zone raw — CSVs inmutables por fecha |
-| **DuckDB** | :1294 | Motor OLAP — lee PostgreSQL via `postgres_scanner`, define cubos analíticos |
-| **Cube.js** | :4000/:15432 | Semantic layer sobre DuckDB — models YAML, pre-aggregations |
-| **Metabase** | :3000 | BI — único entry point del Analista |
+| **DuckDB worker** | — | Motor OLAP — lee PostgreSQL via `postgres_scanner`, computa ROLLUP/CUBE/ASOF JOIN, escribe a PostgreSQL `cube` schema |
+| **Metabase** | :3000 | BI — único entry point del Analista (`bi_user` solo ve `cube.*`) |
+| **Nginx** | :8080 | Sirve reportes HTML de ydata-profiling (solo LAN) |
+| **Uptime Kuma** | :3001 | Monitoreo de servicios + pipeline heartbeat (solo LAN) |
 
 ---
 
@@ -120,13 +121,16 @@ Descarga en batches configurables (`BATCH_SIZE=5`, `TICKER_OFFSET=N`) para evita
 
 ```
 ETLPackage.run()
-  extract()  → lee CSV de MinIO
+  extract()  → lee CSV de MinIO (solo fechas/filings nuevos — incremental)
   profile()  → ydata-profiling HTML + column_stats → profiling.*
   stage()    → valida, quarantinea inválidos, TRUNCATE+COPY → staging.*
   load()     → upserts → dw.*
+  heartbeat  → GET /api/push/<token> a Uptime Kuma
 ```
 
 Advisory lock `pg_try_advisory_lock(20260529)` — aborta si otro ETL ya corre.
+
+**ETL incremental**: en cada run, `OHLCVPackage` filtra las filas cuya `trade_date` ya existe en `fact_price_daily` por ticker. `InsiderPackage` omite los `accession_number` ya presentes en `fact_insider_daily`. Un run diario tarda segundos en vez de minutos. Se puede desactivar con `INCREMENTAL=false`.
 
 **OHLCVPackage** calcula SMA 20/50/200 y Bollinger Bands como window functions en una tabla temporal (`_tmp_ohlcv`) antes del INSERT final, evitando dos lecturas sobre la fact.
 
@@ -156,9 +160,9 @@ El schema `dw` contiene **2 fact tables de negocio** y **1 fact derivada de opti
 
 8 foreign keys garantizan que ningún hecho puede existir sin su dimensión. Los `ON CONFLICT DO UPDATE` del ETL se resuelven usando la PK compuesta como conflicto target — por eso las PKs de facts son compuestas y no solo `BIGSERIAL`.
 
-## Motor OLAP (DuckDB) y Semantic Layer (Cube.js)
+## Motor OLAP (DuckDB)
 
-![Motor OLAP — DuckDB + Cube.js como capas separadas sobre PostgreSQL](img/c4_05_semantic.png)
+![Motor OLAP — DuckDB escribe a PostgreSQL cube schema → Metabase](img/c4_05_semantic.png)
 
 ### Por qué DuckDB y no PostgreSQL para OLAP
 
@@ -171,14 +175,23 @@ PostgreSQL es un motor OLTP (orientado a filas, transaccional). Para queries ana
 | GROUP BY complejos | Slow scan + sort | Bloom filter + hash aggregation |
 | Window functions | Materializa en memoria | Streaming pipeline |
 | `FIRST(expr ORDER BY col)` | No existe — workaround DISTINCT ON | Aggregate nativo |
+| `ASOF JOIN` | No disponible | Nativo — join al precio más cercano en fecha |
 
-DuckDB lee PostgreSQL via la extensión `postgres_scanner` (federación read-only sin ETL extra). Define vistas analíticas equivalentes a los cubos multidimensionales.
+### Flujo DuckDB → PostgreSQL → Metabase
 
-### Cube.js como semantic layer
+DuckDB lee el DW via `postgres_scanner` (federación read-only), computa las tablas analíticas, y las escribe a PostgreSQL `schema cube` via psycopg2. Metabase conecta a PostgreSQL y lee desde `cube.*`.
 
-Cube.js se posiciona sobre DuckDB y expone el modelo de datos como medidas y dimensiones consultables. Los analistas no escriben SQL — consultan `Price.ytd_return_pct` agrupado por `Ticker.sector` y Cube.js genera el SQL óptimo sobre DuckDB.
+```
+PostgreSQL dw.* (DW)
+    ↓ postgres_scanner (read-only)
+DuckDB (ROLLUP, CUBE, ASOF JOIN, FIRST ORDER BY)
+    ↓ psycopg2 COPY (write results)
+PostgreSQL cube.* (OLAP results)
+    ↓ JDBC
+Metabase (bi_user — solo lee cube.*)
+```
 
-**Nota sobre el SQL API de Cube.js**: el SQL API (`:15432`) no resuelve dimensiones de cubos joineados en queries cross-cube. Para eso se usa el REST API (`:4000`). Metabase conecta via SQL API para queries simples y via REST para queries complejas.
+Este diseño separa el motor de cómputo (DuckDB) del almacenamiento de resultados (PostgreSQL), permitiendo que Metabase use su conector PostgreSQL nativo sin drivers adicionales.
 
 ---
 
@@ -223,17 +236,20 @@ staging.raw_insider
 
 | Capa | Tecnología | VM | Nota crítica |
 |---|---|---|---|
-| Extracción OHLCV | Python + yfinance ≥1.4.1 | 10.10.10.20 | **NO pinchar a 0.2.54** — genera rate limit falsos positivos |
-| Extracción Form 4 | Python + requests | 10.10.10.20 | URL Archives: `www.sec.gov` (NO `data.sec.gov`). Filtro `/xsl` en XML |
+| Extracción OHLCV | Python + yfinance ≥1.4.1 | 10.10.10.20 | **NO pinchar a 0.2.54** — genera rate limit falsos positivos. SEC_SLEEP=0.125s (8 req/s) |
+| Extracción Form 4 | Python + requests | 10.10.10.20 | URL Archives: `www.sec.gov` (NO `data.sec.gov`). Filtro `/xsl` en XML. MAX_FILINGS=500 |
 | Landing | MinIO (S3-compatible) | 10.10.10.20 | Credenciales en `.env` |
-| Profiling | ydata-profiling 4.9 | 10.10.10.20 | Requiere `setuptools==69.5.1` como capa Docker separada (Python 3.12-slim) |
+| Profiling | ydata-profiling 4.9 | 10.10.10.20 | Requiere `setuptools==69.5.1` como capa Docker separada. HTML → nginx :8080 + MinIO |
 | Staging | PostgreSQL UNLOGGED TEXT | 10.10.10.10 | TEXT para no castear datos sucios. Quarantine para filas inválidas |
-| Data Warehouse | PostgreSQL 17 — DW puro | 10.10.10.10 | BD: `dw_analytics`. PKs, FKs, CHECKs, SCD2, RLS, audit. SIN OLAP |
-| Motor OLAP | DuckDB | 10.10.10.20 | Columnar + vectorizado. Lee PG via `postgres_scanner`. **Pendiente implementar** |
-| Semantic layer | Cube.js 1.6 | 10.10.10.20 | REST :4000 + SQL API :15432. Apuntará a DuckDB |
-| Visualización | Metabase v0.59 | 10.10.10.20 | Único entry point del Analista. Metrics API: `POST /api/card` con `type:"metric"` |
+| Data Warehouse | PostgreSQL 17 — DW puro | 10.10.10.10 | BD: `dw_analytics`. PKs, FKs, CHECKs, SCD2, RLS, audit trail, pg_stat_statements |
+| Motor OLAP | DuckDB 1.1 | 10.10.10.20 | Columnar + vectorizado. Lee PG via `postgres_scanner`. Escribe resultados a `cube.*` |
+| Resultados OLAP | PostgreSQL schema `cube` | 10.10.10.10 | Computado por DuckDB, almacenado en PG para acceso desde Metabase sin driver especial |
+| ETL incremental | OHLCVPackage + InsiderPackage | 10.10.10.20 | Filtra fechas/accession_numbers ya cargados. `INCREMENTAL=false` para full reload |
+| Visualización | Metabase v0.59 | 10.10.10.20 | `bi_user` → solo `cube.*` (Analista). `dw_user` → `dw + profiling` (Operador) |
+| Monitoreo | Uptime Kuma | 10.10.10.20 | Servicios HTTP/TCP + pipeline heartbeat push. Solo LAN :3001 |
 | Scheduler | pg_cron | 10.10.10.10 | `shared_preload_libraries` — editar `postgresql.conf` directo, NO `ALTER SYSTEM` |
-| Orquestación | Bash + Makefile + tmux | 10.10.10.20 | `make streamline` para pipeline completo |
+| Orquestación | Bash + Makefile | 10.10.10.20 | `make streamline` para pipeline completo. `make refresh-olap` para OLAP |
+| Exposición pública | Cloudflare Tunnel + Anubis | 10.10.10.20 | HTTPS gratuito + proof-of-work anti-scraper. URLs temporales con `make expose` |
 
 ---
 
@@ -253,9 +269,9 @@ Las APIs externas devuelven strings con valores sucios (`"nan"`, `"None"`, `"0.0
 
 El `ON CONFLICT (ticker_id, date_id, ...)` del ETL necesita la PK compuesta para upserts idempotentes. Garantiza unicidad de negocio a nivel de BD. `fact_id BIGSERIAL` tiene `UNIQUE` separado para referencias externas.
 
-## Un solo entry point para el analista (Metabase)
+## Un solo entry point para el analista (Metabase + bi_user)
 
-El analista nunca consulta PostgreSQL directamente. Todos los análisis pasan por Metabase → Cube.js → DuckDB → PostgreSQL. Esto garantiza que las queries siempre pasen por la capa semántica (measures, dimensions, filtros pre-definidos) y que el DW esté protegido de queries ad-hoc sin control.
+El analista nunca consulta PostgreSQL directamente. Se conecta como `bi_user` — un rol PostgreSQL que solo tiene `SELECT` en el schema `cube`. Intentar `SELECT * FROM dw.fact_price_daily` devuelve `ERROR: permiso denegado al esquema dw`. El enforcement es estructural, no convencional.
 
 ## SCD Type 2 ligero en dim_ticker
 
@@ -267,16 +283,18 @@ En lugar de la implementación full SCD2 con surrogate keys y FK migration en fa
 
 | Componente | Estado |
 |---|---|
-| PostgreSQL DW (staging + dw + profiling) | ✅ Implementado |
-| Pipeline Collector + ETL con packages | ✅ Implementado |
-| Observabilidad (profiling schema, quarantine) | ✅ Implementado |
-| SCD Type 2 (dim_ticker_history) | ✅ Implementado |
-| Indicadores técnicos (SMA, Bollinger, volume_ratio) | ✅ Implementado |
-| Cube.js semantic layer (sobre PostgreSQL — temporal) | ✅ Implementado (transitorio) |
-| Metabase: dashboard, models, metrics | ✅ Implementado |
-| **DuckDB como motor OLAP** | ⏳ Pendiente |
-| **Migrar schema cube → DuckDB** | ⏳ Pendiente (depende de DuckDB) |
-| **Apuntar Cube.js a DuckDB** | ⏳ Pendiente |
+| PostgreSQL DW (staging + dw + profiling) | ✅ |
+| Pipeline Collector + ETL con packages | ✅ |
+| ETL incremental (skip fechas/filings ya cargados) | ✅ |
+| Observabilidad (profiling schema, quarantine, ydata-profiling HTML) | ✅ |
+| SCD Type 2 (dim_ticker_history) | ✅ |
+| Indicadores técnicos (SMA 20/50/200, Bollinger, volume_ratio, is_suspect) | ✅ |
+| DuckDB como motor OLAP (ROLLUP, CUBE, ASOF JOIN) | ✅ |
+| Control de acceso: bi_user solo ve cube.*, dw_user ve dw + profiling | ✅ |
+| Metabase: dashboard, models, metrics, 2 conexiones por rol | ✅ |
+| Uptime Kuma + pipeline heartbeat | ✅ |
+| Exposición pública: Cloudflare Tunnel + Anubis PoW | ✅ |
+| Repo GitHub público: lichdencor/dw-market-intel | ✅ |
 
 ---
 
@@ -287,18 +305,20 @@ En lugar de la implementación full SCD2 con surrogate keys y FK migration en fa
 ```bash
 # 10.10.10.20 — stack Docker
 cd ~/monolithic
-make up     # MinIO + Metabase
-make cube   # Cube.js + CubeStore
+make up          # MinIO + Metabase + Uptime Kuma
 ```
 
 ## Correr el pipeline
 
 ```bash
-# Pipeline en batches (30 tickers, 90 días, cap 200 filings/ticker)
-tmux new-session -d -s dw "BATCH_SIZE=5 SLEEP_BETWEEN=60 PERIOD_DAYS=90 MAX_FILINGS=200 bash pipeline/run_streamline.sh 2>&1 | tee /tmp/streamline.log"
+# Pipeline completo (30 tickers, 90 días, cap 500 filings/ticker)
+# Incremental por default — solo procesa datos nuevos
+tmux new-session -d -s dw "BATCH_SIZE=5 SLEEP_BETWEEN=5 PERIOD_DAYS=90 bash pipeline/run_streamline.sh 2>&1 | tee /tmp/streamline.log"
 tmux attach -t dw
 
+make etl           # ETL una vez (partition = hoy, incremental)
 make etl-date DATE=2026-03-26   # ETL sobre partición histórica
+make refresh-olap  # DuckDB computa → escribe a PostgreSQL cube
 ```
 
 ## Verificación
@@ -310,11 +330,20 @@ make check    # integridad referencial
 
 ## Accesos
 
-| Servicio | URL | Credenciales |
-|---|---|---|
-| Metabase (Analista) | http://10.10.10.20:3000 | `MB_ADMIN_EMAIL` / `MB_ADMIN_PASSWORD` (ver `.env`) |
-| MinIO (Operador) | http://10.10.10.20:9001 | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` (ver `.env`) |
-| Cube.js Playground (Operador) | http://10.10.10.20:4000 | — |
+| Servicio | URL local | Rol | Credenciales |
+|---|---|---|---|
+| **Metabase** | http://10.10.10.20:3000 | Analista + Operador | ver `.env` (`MB_ADMIN_EMAIL`) |
+| **MinIO UI** | http://10.10.10.20:9001 | Operador | ver `.env` (`MINIO_ROOT_USER`) |
+| **Profiler UI** | http://10.10.10.20:8080 | Operador | — |
+| **Uptime Kuma** | http://10.10.10.20:3001 | Operador | `operador` / ver `.env` |
+| PostgreSQL | 10.10.10.10:5432 | ETL / DBA | ver `.env` (`DB_USER`) |
+
+**URLs públicas temporales** (cambian con cada `make expose`):
+
+```bash
+make expose    # genera 3 URLs HTTPS via Cloudflare Tunnel + Anubis
+make unexpose  # cierra los tunnels
+```
 
 ---
 
