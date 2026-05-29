@@ -135,13 +135,15 @@ class OHLCVPackage(ETLPackage):
                     ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS bb_lower
             FROM with_vol
         )
-        SELECT ticker_id, TO_CHAR(trade_date,'YYYYMMDD')::INT AS date_id, 1 AS period_id,
+        SELECT DISTINCT ON (ticker_id, date_id)
+            ticker_id, TO_CHAR(trade_date,'YYYYMMDD')::INT AS date_id, 1 AS period_id,
             open, high, low, close, adj_close, volume,
             daily_return, pct_change, rolling_30d_vol, volume_ratio,
             ABS(COALESCE(pct_change, 0)) > 0.15 AS is_suspect,
             sma_20, sma_50, sma_200, bb_upper, bb_lower,
             '{partition}'::DATE AS source_partition
         FROM with_indicators
+        ORDER BY ticker_id, date_id
         """
         sql_ins = """
         INSERT INTO dw.fact_price_daily

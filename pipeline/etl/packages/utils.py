@@ -39,7 +39,9 @@ def read_csv(client: Minio, bucket: str, partition: str, filename: str) -> pd.Da
 
 
 def populate_dim_date(conn, date_strings: list) -> None:
-    dates = pd.to_datetime(date_strings, errors="coerce").dropna()
+    # Normalizar a string primero para manejar tanto str como datetime.date de PG
+    normalized = [str(d) for d in date_strings if d is not None]
+    dates = pd.to_datetime(normalized, errors="coerce").dropna()
     unique = sorted(set(d.date() for d in dates))
     records = []
     for d in unique:

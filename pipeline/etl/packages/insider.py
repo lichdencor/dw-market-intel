@@ -59,6 +59,12 @@ class InsiderPackage(ETLPackage):
             "shares","price_per_share","acquired_disposed","shares_owned_after",
         ]
         df_s = data.reindex(columns=cols).fillna("").astype(str)
+        # Deduplicar por la PK del staging antes del COPY
+        dedup_keys = ["accession_number","issuer_cik","reporter_cik","transaction_date","transaction_code"]
+        before = len(df_s)
+        df_s = df_s.drop_duplicates(subset=dedup_keys)
+        if len(df_s) < before:
+            log.warning(f"  [stage] {before - len(df_s)} duplicados eliminados del CSV")
         buf = io.StringIO()
         df_s.to_csv(buf, index=False, header=False)
         buf.seek(0)
