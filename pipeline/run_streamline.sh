@@ -15,7 +15,7 @@
 set -euo pipefail
 
 BATCH_SIZE=${BATCH_SIZE:-${1:-5}}
-SLEEP_BETWEEN=${SLEEP_BETWEEN:-${2:-600}}    # 10 min entre batches — margen anti rate-limit
+SLEEP_BETWEEN=${SLEEP_BETWEEN:-${2:-5}}      # SEC no tiene límite diario, solo 10 req/s
 TOTAL_TICKERS=30
 
 log() { echo "[$(date '+%H:%M:%S')] [streamline] $1"; }

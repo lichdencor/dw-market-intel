@@ -71,8 +71,10 @@ SEC_ARCHIVES_BASE = "https://www.sec.gov"    # Filing documents: /Archives/edgar
 SEC_BASE          = SEC_API_BASE             # backwards compat — usado en get_cik_map
 SEC_SEARCH        = "https://efts.sec.gov/LATEST/search-index"
 
-# Pausa entre requests a la SEC — máximo permitido: 10 req/seg
-SEC_SLEEP = 0.15
+# Pausa entre requests a la SEC.
+# Límite oficial: 10 req/s por IP. Recomendado: 8 req/s (0.125s) para margen.
+# No hay límite diario — solo por segundo. SLEEP_BETWEEN entre batches no es necesario para la SEC.
+SEC_SLEEP = float(os.getenv("SEC_SLEEP", "0.125"))
 
 DEFAULT_TICKERS = [
     "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA",
@@ -348,15 +350,22 @@ def sec_get(url: str, params: dict = None, retries: int = 3) -> requests.Respons
             if r.status_code == 200:
                 return r
             elif r.status_code == 429:
-                wait = 60 + random.uniform(5, 15)
-                log.warning(f"  Rate limit SEC (429), esperando {wait:.0f}s...")
+                # IP bloqueada ~10 min según docs de EDGAR. Exponential backoff.
+                wait = min(600, (2 ** attempt) * 60) + random.uniform(5, 15)
+                log.warning(f"  Rate limit SEC 429 (intento {attempt+1}/{retries}), backoff {wait:.0f}s...")
+                time.sleep(wait)
+            elif r.status_code in (503, 500):
+                # Errores transientes del servidor — backoff corto
+                wait = (2 ** attempt) * 2 + random.uniform(0, 2)
+                log.warning(f"  SEC HTTP {r.status_code}, backoff {wait:.1f}s...")
                 time.sleep(wait)
             else:
                 log.warning(f"  SEC HTTP {r.status_code} en {url}")
                 time.sleep(2 ** attempt)
         except Exception as e:
-            log.warning(f"  Error SEC request intento {attempt + 1}: {e}")
-            time.sleep(3 + random.random())
+            wait = (2 ** attempt) * 3 + random.random()
+            log.warning(f"  Error SEC request intento {attempt+1}/{retries}: {e}")
+            time.sleep(wait)
     return None
 
 
