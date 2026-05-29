@@ -111,6 +111,20 @@ def main():
         conn.close()
 
     total = sum(r.rows_loaded for r in results)
+
+    # Uptime Kuma heartbeat — notifica que el ETL terminó correctamente
+    heartbeat_url = os.getenv("UPTIME_KUMA_PUSH_URL", "")
+    if heartbeat_url:
+        try:
+            import urllib.request
+            urllib.request.urlopen(
+                f"{heartbeat_url}?status=up&msg=ETL+OK+{total}+rows&ping=",
+                timeout=5
+            )
+            log.info(f"Heartbeat enviado a Uptime Kuma")
+        except Exception as e:
+            log.warning(f"Heartbeat fallido (no crítico): {e}")
+
     log.info("=" * 55)
     log.info(f"ETL completado — {total:,} filas procesadas en {len(results)} packages")
     log.info("=" * 55)

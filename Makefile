@@ -21,11 +21,11 @@ PSQL_ETL        := docker run --rm -e PGPASSWORD=$(DB_PASSWORD) $(DB_CONTAINER) 
 # -------------------------------------------------------------
 
 .PHONY: up
-up:                           ## Levanta MinIO + Metabase
-	$(COMPOSE) up -d minio metabase
+up:                           ## Levanta MinIO + Metabase + Uptime Kuma
+	$(COMPOSE) up -d minio metabase uptime-kuma
 
 .PHONY: expose
-expose:                       ## Expone Metabase + Profiler + MinIO via Cloudflare Tunnel
+expose:                       ## Expone Metabase + Profiler + MinIO via Cloudflare Tunnel (Uptime Kuma es solo interno)
 	$(COMPOSE) --profile expose up -d cf-metabase cf-profiler cf-minio
 	@echo "Esperando URLs (10s)..."
 	@sleep 10
@@ -33,6 +33,7 @@ expose:                       ## Expone Metabase + Profiler + MinIO via Cloudfla
 	@docker logs cf-metabase 2>&1 | grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' | tail -1 | xargs -I{} echo "  Metabase  → {}"
 	@docker logs cf-profiler 2>&1 | grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' | tail -1 | xargs -I{} echo "  Profiler  → {}"
 	@docker logs cf-minio    2>&1 | grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' | tail -1 | xargs -I{} echo "  MinIO     → {}"
+	@echo "  Uptime Kuma → http://10.10.10.20:3001  (solo LAN)"
 
 .PHONY: unexpose
 unexpose:                     ## Cierra los túneles Cloudflare

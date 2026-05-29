@@ -57,6 +57,20 @@ services:
       retries: 5
 
   # ------------------------------------------------------------------
+  # Uptime Kuma — monitoreo de servicios + pipeline heartbeat
+  # UI: http://10.10.10.20:3001
+  # Push monitor: el ETL hace GET a la URL de heartbeat al terminar
+  # ------------------------------------------------------------------
+  uptime-kuma:
+    image: louislam/uptime-kuma:latest
+    container_name: uptime-kuma
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      - uptime_data:/app/data
+
+  # ------------------------------------------------------------------
   # Nginx — sirve los reportes HTML de ydata-profiling
   # Operador accede a http://10.10.10.20:8080
   # ------------------------------------------------------------------
@@ -200,10 +214,12 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-etl123}
       PROFILES_DIR: /app/profiles
       PYTHONWARNINGS: "ignore"
+      UPTIME_KUMA_PUSH_URL: ${UPTIME_KUMA_PUSH_URL:-}
     volumes:
       - ./profiles:/app/profiles
 
 volumes:
+  uptime_data:
   minio_data:
     external: true
     name: chavez_minio_data
