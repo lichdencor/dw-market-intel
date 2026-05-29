@@ -20,13 +20,30 @@ class InsiderPackage(ETLPackage):
     """
 
     def extract(self) -> pd.DataFrame:
+        import os
         client = get_minio_client(self.minio_config)
         bucket = self.minio_config["bucket"]
         try:
-            return read_csv(client, bucket, self.partition_date, "insider_raw.csv")
+            df = read_csv(client, bucket, self.partition_date, "insider_raw.csv")
         except Exception as e:
             log.warning(f"insider_raw.csv no encontrado ({e}) — pipeline insider omitido")
             return pd.DataFrame()
+
+        # ETL incremental: solo transacciones cuyo accession_number no esté ya cargado
+        if os.getenv("INCREMENTAL", "true").lower() != "false" and not df.empty \
+                and "accession_number" in df.columns:
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT DISTINCT accession_number FROM dw.fact_insider_daily")
+                loaded = {row[0] for row in cur.fetchall()}
+
+            if loaded:
+                before = len(df)
+                df = df[~df["accession_number"].isin(loaded)]
+                skipped = before - len(df)
+                if skipped > 0:
+                    self.log.info(f"Incremental: {skipped:,} transacciones ya cargadas omitidas, {len(df):,} nuevas")
+
+        return df
 
     def profile(self, data: pd.DataFrame) -> list[str]:
         # Schema contract

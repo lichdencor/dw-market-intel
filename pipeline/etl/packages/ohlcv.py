@@ -21,10 +21,41 @@ class OHLCVPackage(ETLPackage):
     """
 
     def extract(self) -> dict:
+        import os
         client = get_minio_client(self.minio_config)
         bucket = self.minio_config["bucket"]
+        df_ohlcv = read_csv(client, bucket, self.partition_date, "ohlcv_raw.csv")
+
+        # ETL incremental: filtrar solo fechas posteriores al último dato en la fact
+        if os.getenv("INCREMENTAL", "true").lower() != "false" and not df_ohlcv.empty:
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    SELECT t.symbol, MAX(d.full_date) AS max_date
+                    FROM dw.fact_price_daily f
+                    JOIN dw.dim_ticker t ON t.ticker_id = f.ticker_id
+                    JOIN dw.dim_date   d ON d.date_id   = f.date_id
+                    GROUP BY t.symbol
+                """)
+                max_dates = {row[0]: row[1] for row in cur.fetchall()}
+
+            if max_dates:
+                import pandas as pd
+                df_ohlcv["_dt"] = pd.to_datetime(df_ohlcv["trade_date"], errors="coerce").dt.date
+                df_ohlcv["_max"] = df_ohlcv["ticker"].map(max_dates)
+                before = len(df_ohlcv)
+                # Mantener: ticker nuevo (sin _max) O fecha posterior al máximo cargado
+                mask = df_ohlcv["_max"].isna() | (
+                    df_ohlcv["_dt"].notna() & (df_ohlcv["_dt"] > df_ohlcv["_max"])
+                )
+                df_ohlcv = df_ohlcv[mask].drop(columns=["_dt", "_max"])
+                skipped = before - len(df_ohlcv)
+                if skipped > 0:
+                    self.log.info(f"Incremental: {skipped:,} filas ya cargadas omitidas, {len(df_ohlcv):,} nuevas")
+            else:
+                pass  # fact vacía — cargar todo
+
         return {
-            "ohlcv": read_csv(client, bucket, self.partition_date, "ohlcv_raw.csv"),
+            "ohlcv": df_ohlcv,
             "info":  read_csv(client, bucket, self.partition_date, "ticker_info.csv"),
         }
 
